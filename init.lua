@@ -11,7 +11,9 @@
 --    • blink.cmp        autocompletion popup
 --    • conform          format on save (rustfmt, gofmt/goimports)
 --    • which-key        press <Space> and wait: shows every shortcut
---    • lualine, gitsigns, autopairs, tokyonight colorscheme
+--    • bufferline       open files as tabs along the top <S-h>/<S-l>
+--    • trouble          list of all errors / references  <Space>xx
+--    • lualine, gitsigns, mini.pairs, gruvbox colorscheme
 --
 --  Useful commands:  :Lazy  (plugins)   :Mason  (language servers)
 --                    :checkhealth       :restart (reload Neovim after edits)
@@ -62,6 +64,19 @@ vim.diagnostic.config({
   virtual_text = true,
   severity_sort = true,
   float = { source = true },
+})
+
+-- Reload files changed outside Neovim (AI agents, git checkout, formatters).
+-- 'autoread' is on by default but only checks on focus/shell commands, so also
+-- check on buffer switch and poll every second. Buffers with unsaved edits are
+-- never overwritten — you get a warning instead.
+local function checktime()
+  if vim.fn.mode() == "n" and vim.fn.getcmdwintype() == "" then vim.cmd("checktime") end
+end
+vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter" }, { callback = checktime })
+vim.uv.new_timer():start(1000, 1000, vim.schedule_wrap(checktime))
+vim.api.nvim_create_autocmd("FileChangedShellPost", {
+  callback = function(args) vim.notify("Reloaded " .. vim.fn.fnamemodify(args.file, ":~:.")) end,
 })
 
 -- -----------------------------------------------------------------------------
@@ -149,6 +164,18 @@ vim.opt.rtp:prepend(lazypath)
 -- -----------------------------------------------------------------------------
 -- 6. Plugins
 -- -----------------------------------------------------------------------------
+
+-- Close a buffer (tab) but keep its window open by showing another file there.
+-- Asks to save first if it has unsaved changes.
+local function close_buffer(buf)
+  buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf
+  if buf == vim.api.nvim_get_current_buf() then
+    vim.cmd("bprevious")
+    if vim.api.nvim_get_current_buf() == buf then vim.cmd("enew") end -- it was the last one
+  end
+  vim.cmd("confirm bdelete " .. buf)
+end
+
 require("lazy").setup({
   spec = {
 
@@ -187,6 +214,30 @@ require("lazy").setup({
         renderer = { group_empty = true },
         filters = { dotfiles = false, git_ignored = false },
         update_focused_file = { enable = true },
+      },
+    },
+
+    -- Open files as tabs along the top ---------------------------------------
+    -- <S-h>/<S-l> previous/next · <Space>bd close · click a tab to switch to it
+    {
+      "akinsho/bufferline.nvim",
+      version = "*",
+      lazy = false,
+      dependencies = { "nvim-tree/nvim-web-devicons" },
+      keys = {
+        { "<S-h>", "<cmd>BufferLineCyclePrev<CR>", desc = "Previous buffer" },
+        { "<S-l>", "<cmd>BufferLineCycleNext<CR>", desc = "Next buffer" },
+        { "<leader>bd", function() close_buffer() end, desc = "Close buffer" },
+        { "<leader>bo", "<cmd>BufferLineCloseOthers<CR>", desc = "Close other buffers" },
+        { "<leader>bp", "<cmd>BufferLinePick<CR>", desc = "Pick buffer" },
+      },
+      opts = {
+        options = {
+          close_command = close_buffer,       -- the x on a tab
+          right_mouse_command = close_buffer, -- right-click a tab
+          diagnostics = "nvim_lsp",           -- error/warning count on each tab
+          offsets = { { filetype = "NvimTree", text = "Files", separator = true } },
+        },
       },
     },
 
@@ -311,15 +362,32 @@ require("lazy").setup({
       },
     },
 
+    -- Error / reference lists ------------------------------------------------
+    -- Inside the list: <Enter> jump · o jump & close · q close · ? all keys
+    {
+      "folke/trouble.nvim",
+      cmd = "Trouble",
+      keys = {
+        { "<leader>xx", "<cmd>Trouble diagnostics toggle<CR>", desc = "All errors/warnings" },
+        { "<leader>xb", "<cmd>Trouble diagnostics toggle filter.buf=0<CR>", desc = "Errors in this file" },
+        { "<leader>xs", "<cmd>Trouble symbols toggle focus=false<CR>", desc = "Symbols outline" },
+        { "<leader>xr", "<cmd>Trouble lsp_references toggle<CR>", desc = "References to symbol" },
+        { "<leader>xq", "<cmd>Trouble qflist toggle<CR>", desc = "Quickfix list" },
+      },
+      opts = {},
+    },
+
     -- Shortcut helper: press <Space> and wait a moment ------------------------
     {
       "folke/which-key.nvim",
       event = "VeryLazy",
       opts = {
         spec = {
+          { "<leader>b", group = "buffer" },
           { "<leader>f", group = "find" },
           { "<leader>c", group = "code" },
           { "<leader>t", group = "toggle" },
+          { "<leader>x", group = "trouble (lists)" },
           { "gr", group = "LSP" },
         },
       },
@@ -328,12 +396,16 @@ require("lazy").setup({
     -- Small quality-of-life plugins ------------------------------------------
     { "nvim-lualine/lualine.nvim", opts = { options = { globalstatus = true } } }, -- status bar
     { "lewis6991/gitsigns.nvim", opts = {} },                    -- git +/~/- in the gutter
-    { "windwp/nvim-autopairs", event = "InsertEnter", opts = {} }, -- auto-close (), [], ""
+    { "nvim-mini/mini.pairs", event = "InsertEnter", opts = {} },  -- auto-close (), [], ""
   },
 
-  install = { colorscheme = { "tokyonight-night" } },
+  install = { colorscheme = { "gruvbox" } },
   checker = { enabled = false }, -- don't nag about plugin updates; run :Lazy update yourself
   rocks = { enabled = false },   -- no plugin here needs luarocks
+  -- Keep Neovim's bundled parsers (lua, vim, markdown, ...) on the runtimepath.
+  -- lazy.nvim looks for them in /usr/lib64/nvim when /usr/lib64 exists (Ubuntu),
+  -- but the distro package puts them in /usr/lib/nvim.
+  performance = { rtp = { paths = { vim.fn.fnamemodify(vim.v.progpath, ":p:h:h") .. "/lib/nvim" } } },
 })
 
 -- Terminal
